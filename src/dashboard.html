@@ -133,6 +133,7 @@ async function poll(){try{ST=await (await fetch("/api/state")).json();render()}c
 async function pollOll(){try{const o=await (await fetch("/api/ollama")).json();
  $("oll").innerHTML=o.ok?`<span class="dot on"></span>Ollama ${o.version} · `+(o.running.length?o.running.map(r=>`${r.name} ${r.gpu_pct}% GPU`).join(", "):"no model loaded"):`<span class="dot off"></span>Ollama unreachable — start it (ollama serve)`}catch(e){}}
 const fmt=x=>{x=Math.round(x);const h=Math.floor(x/3600),m=Math.floor(x%3600/60),s=x%60;return h?`${h}h ${m}m`:m?`${m}m ${String(s).padStart(2,"0")}s`:`${s}s`};
+let LASTSIG="";const cv_w=()=>document.getElementById("chScore").clientWidth;
 function render(){const s=ST,st=s.paused&&s.status==="running"?"paused":s.status,run=s.status==="running";
  $("status").textContent=st;$("status").className="pill "+st;$("runid").textContent=s.run_ts?"run "+s.run_ts:"";
  $("bStart").disabled=run;$("bPause").disabled=!run||s.paused;$("bResume").disabled=!run||!s.paused;$("bStop").disabled=!run;
@@ -144,11 +145,11 @@ function render(){const s=ST,st=s.paused&&s.status==="running"?"paused":s.status
  const sp=ms.map(m=>M.models[m].avg_tok).filter(x=>x);$("kSpd").textContent=sp.length?(sp.reduce((a,b)=>a+b,0)/sp.length).toFixed(1):"–";
  const c=s.current;
  if(c){$("curhead").textContent=`${c.case_id} · ${c.category} · ${c.model} · rep ${c.rep} · ${c.elapsed}s`;$("termT").textContent=`${c.model} › ${c.case_id}`;$("curprompt").textContent=c.user;
-  const t=$("curtext");t.className="out cur";t.textContent=c.partial||"… waiting for first token (the model may still be loading into memory)";t.scrollTop=t.scrollHeight}
+  const t=$("curtext");t.className="out cur";t.textContent=c.partial||(c.phase==="loading"?`⏳ Loading ${c.model} into memory… first load takes 1–3 min on 4 GB VRAM. It loads once, then all cases run fast.`:"… waiting for first token");t.scrollTop=t.scrollHeight}
  else{$("curhead").textContent="";$("termT").textContent=s.status==="done"?"run complete":"idle";const t=$("curtext");t.className="out idle";if(!run){t.textContent=s.status==="done"?"✔ Run complete — download the Excel report from the top right.":"Model output streams here, token by token."}}
- renderCharts();renderTable();$("log").textContent=s.log.join("\n");$("log").scrollTop=1e9;if(selIdx>=0)refreshInsp(false)}
+ const sig=s.jobs_done+"|"+s.metrics.pending_review+"|"+s.results.length+"|"+s.results.filter(r=>r.manual_label).length+"|"+$("fm").value+$("fc").value+$("fl").value+"|"+selIdx+"|"+cv_w();if(sig!==LASTSIG){LASTSIG=sig;renderCharts();renderTable()}$("log").textContent=s.log.join("\n");$("log").scrollTop=1e9;if(selIdx>=0)refreshInsp(false)}
 /* ---------- canvas charts ---------- */
-function setup(cv){const d=window.devicePixelRatio||1,w=cv.clientWidth,h=+cv.getAttribute("height");cv.width=w*d;cv.height=h*d;cv.style.height=h+"px";const x=cv.getContext("2d");x.scale(d,d);x.clearRect(0,0,w,h);return[x,w,h]}
+function setup(cv){const d=Math.min(window.devicePixelRatio||1,1.5),w=cv.clientWidth,h=+cv.getAttribute("height"),W=Math.round(w*d),H=Math.round(h*d);if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H}cv.style.height=h+"px";const x=cv.getContext("2d");x.setTransform(d,0,0,d,0,0);x.clearRect(0,0,w,h);return[x,w,h]}
 function empty(x,w,h,t){x.fillStyle="#475569";x.font="13px system-ui";x.textAlign="center";x.fillText(t||"No data yet — start a run",w/2,h/2)}
 function rr(x,a,b,w,h,r){r=Math.min(r,w/2,Math.abs(h));x.beginPath();x.moveTo(a,b+h);x.lineTo(a,b+r);x.quadraticCurveTo(a,b,a+r,b);x.lineTo(a+w-r,b);x.quadraticCurveTo(a+w,b,a+w,b+r);x.lineTo(a+w,b+h);x.closePath();x.fill()}
 function grouped(cv,groups,series,max){const[x,w,h]=setup(cv),L=36,B=26,T=18,pw=w-L-8,ph=h-B-T;if(!groups.length)return empty(x,w,h);

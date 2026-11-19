@@ -44,7 +44,7 @@ def stream_chat(model, user, opts, on_token):
             if stop_flag.is_set(): break
             out += w + " "; on_token(out); time.sleep(0.06)
         return out.strip(), len(out.split()), 1e9
-    payload = {"model": model, "stream": True, "options": opts,
+    payload = {"model": model, "stream": True, "options": opts, "keep_alive": "30m",
                "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]}
     if model.startswith("qwen3"): payload["think"] = False
     def open_req(p):
@@ -72,10 +72,11 @@ def worker(cfg):
     cases = [c for c in C if (not cfg["pilot"] or c["id"] in ("B1", "D2", "I1"))]
     models = cfg["models"]
     jobs = []
+    # model-outer order: each model is loaded ONCE and runs all its cases. Interleaving models
+    # forces Ollama to unload/reload a multi-GB model on every generation (4 GB VRAM cannot hold all three).
     for rep in range(1, cfg["reps"] + 1):
-        for i, c in enumerate(cases):
-            k = i % len(models)
-            for m in models[k:] + models[:k]: jobs.append((rep, c, m))
+        for m in models:
+            for c in cases: jobs.append((rep, c, m))
     env = {"timestamp": ts, "options": opts, "system_prompt": SYSTEM_PROMPT, "config": cfg, "mock": MOCK,
            "cases_sha256": hashlib.sha256(json.dumps(C, sort_keys=True).encode()).hexdigest()}
     if not MOCK:
@@ -90,11 +91,18 @@ def worker(cfg):
     with L:
         S.update(status="running", jobs_total=len(jobs), jobs_done=0, results=[], started=time.time(), ended=None, run_ts=ts, error=None)
     log(f"Started run {ts}: {len(jobs)} generations ({len(cases)} cases x {len(models)} models x {cfg['reps']} reps)")
+    loaded = None
     for rep, c, m in jobs:
         pause_ev.wait()
         if stop_flag.is_set(): break
+        if m != loaded and not MOCK:
+            with L: S["current"] = {"case_id": c["id"], "category": c["category"], "model": m, "rep": rep, "user": c["user"], "partial": "", "t0": time.time(), "phase": "loading"}
+            log(f"Loading {m} into memory (first load can take 1-3 min; not counted in latency)")
+            try: http_json("/api/generate", {"model": m, "prompt": "", "keep_alive": "30m", "stream": False}, timeout=900)
+            except Exception as e: log(f"warm-up of {m} failed: {e} (continuing)")
+            loaded = m
         t0 = time.time()
-        with L: S["current"] = {"case_id": c["id"], "category": c["category"], "model": m, "rep": rep, "user": c["user"], "partial": "", "t0": t0}
+        with L: S["current"] = {"case_id": c["id"], "category": c["category"], "model": m, "rep": rep, "user": c["user"], "partial": "", "t0": t0, "phase": "generating"}
         def on_token(txt):
             with L:
                 if S["current"]: S["current"]["partial"] = txt
